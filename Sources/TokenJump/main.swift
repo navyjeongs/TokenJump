@@ -1,8 +1,26 @@
 import AppKit
 import SpriteKit
+import CoreText
 
 func verify(_ condition: @autoclosure () -> Bool, line: UInt = #line) {
     if !condition() { fputs("FAIL at line \(line)\n", stderr); exit(1) }
+}
+
+enum GameFont {
+    static var directory: URL {
+        let bundled = Bundle.main.resourceURL?.appendingPathComponent("Fonts")
+        if let bundled = bundled, FileManager.default.fileExists(atPath: bundled.appendingPathComponent("Galmuri11.ttf").path) { return bundled }
+        return URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent("Fonts")
+    }
+    static let name: String = {
+        let url = directory.appendingPathComponent("Galmuri11.ttf")
+        guard CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil),
+              let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor],
+              let descriptor = descriptors.first,
+              let name = CTFontDescriptorCopyAttribute(descriptor, kCTFontNameAttribute) as? String else { return "Menlo" }
+        return name
+    }()
+    static func font(_ size: CGFloat) -> NSFont { NSFont(name: name, size: size) ?? .systemFont(ofSize: size) }
 }
 
 enum Difficulty: String, CaseIterable {
@@ -198,8 +216,8 @@ final class Game: SKScene {
     var onContinue: (() -> Void)?
     var onStageChange: (() -> Void)?
     let player = SKShapeNode(rectOf: CGSize(width: 24, height: 30), cornerRadius: 7)
-    let hud = SKLabelNode(fontNamed: "Menlo-Bold")
-    let message = SKLabelNode(fontNamed: "Menlo")
+    let hud = SKLabelNode(fontNamed: GameFont.name)
+    let message = SKLabelNode(fontNamed: GameFont.name)
     var keys = Set<UInt16>()
     var platforms: [CGPoint] = []
     var mechanicsEnabled = true
@@ -316,7 +334,7 @@ final class Game: SKScene {
         backgroundColor = NSColor(calibratedRed: 0.04, green: 0.06, blue: 0.13, alpha: 1)
         roomCamera.position = CGPoint(x: 210, y: 280); addChild(roomCamera); camera = roomCamera
         player.fillColor = .systemMint; player.strokeColor = .clear; player.zPosition = 5; addChild(player)
-        hud.fontSize = 13; hud.horizontalAlignmentMode = .left; hud.position = CGPoint(x: 16, y: 532); addChild(hud)
+        hud.fontSize = 12; hud.horizontalAlignmentMode = .left; hud.position = CGPoint(x: 16, y: 532); addChild(hud)
         message.isHidden = true; message.fontSize = 12; message.position = CGPoint(x: 210, y: 505); addChild(message)
 
         warningLine.fillColor = .systemOrange; warningLine.strokeColor = .clear; warningLine.zPosition = 1; addChild(warningLine)
@@ -767,10 +785,11 @@ final class App: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         completionPanel = NSVisualEffectView(frame: NSRect(x: 32, y: 162, width: 356, height: 220))
         completionPanel.material = .popover; completionPanel.blendingMode = .withinWindow; completionPanel.state = .active
         completionPanel.wantsLayer = true; completionPanel.layer?.cornerRadius = 12; completionPanel.layer?.masksToBounds = true; completionPanel.isHidden = true
-        completionTitle = text("", size: 21, weight: .semibold, frame: NSRect(x: 22, y: 151, width: 312, height: 35), parent: completionPanel)
+        completionTitle = text("", size: 24, weight: .semibold, frame: NSRect(x: 22, y: 151, width: 312, height: 35), parent: completionPanel)
         completionHint = text("", size: 13, color: .secondaryLabelColor, frame: NSRect(x: 22, y: 96, width: 312, height: 48), parent: completionPanel)
         completionButton = NSButton(title: "다음 스테이지", target: self, action: #selector(continueAfterClear(_:)))
         completionButton.bezelStyle = .rounded; completionButton.frame = NSRect(x: 20, y: 30, width: 316, height: 38); completionButton.keyEquivalent = "\r"; completionPanel.addSubview(completionButton)
+        completionTitle.font = GameFont.font(24); completionHint.font = GameFont.font(12); completionButton.font = GameFont.font(12)
         content.addSubview(completionPanel)
         updateCompletion()
         updateGameScreen()
@@ -805,17 +824,19 @@ final class App: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         _ = text("도전 준비", size: 23, weight: .semibold, frame: NSRect(x: 22, y: 505, width: 376, height: 32), parent: selectionPanel)
         _ = text("난이도", size: 13, weight: .medium, frame: NSRect(x: 22, y: 468, width: 376, height: 22), parent: selectionPanel)
         difficultyPicker = NSSegmentedControl(labels: Difficulty.allCases.map { $0.title }, trackingMode: .selectOne, target: self, action: #selector(pickDifficulty(_:)))
+        difficultyPicker.font = GameFont.font(12)
         difficultyPicker.frame = NSRect(x: 22, y: 430, width: 376, height: 30); selectionPanel.addSubview(difficultyPicker)
         selectionHint = text("", size: 11, color: .secondaryLabelColor, frame: NSRect(x: 22, y: 386, width: 376, height: 38), parent: selectionPanel)
         _ = text("스테이지", size: 13, weight: .medium, frame: NSRect(x: 22, y: 351, width: 376, height: 22), parent: selectionPanel)
         for (index, stage) in Stage.all.enumerated() {
             let button = NSButton(title: "", target: self, action: #selector(pickStage(_:)))
-            button.tag = index + 1; button.bezelStyle = .regularSquare; button.setButtonType(.pushOnPushOff)
+            button.font = GameFont.font(12); button.tag = index + 1; button.bezelStyle = .regularSquare; button.setButtonType(.pushOnPushOff)
             button.frame = NSRect(x: 22 + (index % 3) * 128, y: 283 - (index / 3) * 57, width: 120, height: 49)
             button.toolTip = stage.name; selectionPanel.addSubview(button); stageButtons.append(button)
         }
         stageHint = text("", size: 11, color: .secondaryLabelColor, frame: NSRect(x: 22, y: 94, width: 376, height: 20), parent: selectionPanel)
         let start = NSButton(title: "선택한 스테이지 시작", target: self, action: #selector(startSelectedStage))
+        start.font = GameFont.font(12)
         start.bezelStyle = .rounded; start.frame = NSRect(x: 22, y: 55, width: 376, height: 38); selectionPanel.addSubview(start)
         _ = text("A / D 이동 · Space 점프 · R 다시 시작", size: 11, color: .secondaryLabelColor, frame: NSRect(x: 22, y: 20, width: 376, height: 22), parent: selectionPanel)
         selectedStage = scene.stage; refreshSelection()
@@ -861,6 +882,7 @@ final class App: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
     func text(_ value: String, size: CGFloat, weight: NSFont.Weight = .regular, color: NSColor = .labelColor, frame: NSRect, parent: NSView) -> NSTextField {
         let label = NSTextField(labelWithString: value); label.font = .systemFont(ofSize: size, weight: weight); label.textColor = color; label.frame = frame
+        if parent === selectionPanel { label.font = GameFont.font(size >= 20 ? 24 : 12) }
         label.maximumNumberOfLines = 0; label.lineBreakMode = .byWordWrapping; parent.addSubview(label); return label
     }
     func buildUsagePanel(in content: NSView) {
@@ -937,10 +959,12 @@ final class App: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
         section("캐릭터", items: Avatar.allCases.map { $0.title }, selected: Avatar.allCases.firstIndex(of: Avatar(rawValue: usage.save.avatar ?? "bit") ?? .bit) ?? 0, action: #selector(changeAvatar(_:)))
         menu.addItem(.separator())
+        let license = NSMenuItem(title: "서체 라이선스 · 갈무리11", action: #selector(showFontLicense), keyEquivalent: ""); license.target = self; menu.addItem(license)
         menu.addItem(withTitle: "종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: 0), in: sender)
         if popover.isShown && isGameTab { resumeGame() }
     }
+    @objc func showFontLicense() { NSWorkspace.shared.open(GameFont.directory.appendingPathComponent("OFL.txt")) }
     @objc func nextStage() {
         guard scene.cleared, usage.advanceStage() else { return }
         scene.loadStage(); if popover.isShown && isGameTab { resumeGame() }
@@ -1178,6 +1202,18 @@ if CommandLine.arguments.contains("--hazard-test") {
         }
     }
     print("PASS: 36 layouts, hard obstacles from stage 1, no rail guides, invisible ledges cannot support jumps, timed recovery, crumble recovery, rotor collisions, first-platform reset")
+    exit(0)
+}
+if CommandLine.arguments.contains("--font-test") {
+    _ = NSApplication.shared
+    verify(GameFont.name.contains("Galmuri"))
+    let characters = Array("점프 스테이지 난이도 열쇠 ↑ 0123456789 N".utf16)
+    var glyphs = [CGGlyph](repeating: 0, count: characters.count)
+    verify(CTFontGetGlyphsForCharacters(CTFontCreateWithName(GameFont.name as CFString, 12, nil), characters, &glyphs, characters.count))
+    let license = try! String(contentsOf: GameFont.directory.appendingPathComponent("OFL.txt"), encoding: .utf8)
+    verify(license.contains("SIL OPEN FONT LICENSE") && license.contains("Lee Minseo"))
+    verify(GameFont.font(12).fontName.contains("Galmuri"))
+    print("PASS: bundled font registered for process only, Korean/digits/arrow glyphs, original copyright and OFL included")
     exit(0)
 }
 if CommandLine.arguments.contains("--feature-test") {

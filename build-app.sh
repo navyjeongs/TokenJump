@@ -20,6 +20,9 @@ fi
 swiftc "${extra_flags[@]}" -O -swift-version 5 -module-cache-path "$CLANG_MODULE_CACHE_PATH" -framework AppKit -framework SpriteKit Sources/TokenJump/main.swift -o .build/release/TokenJump
 swiftc "${extra_flags[@]}" -swift-version 5 -module-cache-path "$CLANG_MODULE_CACHE_PATH" -framework AppKit Tools/RenderSprites.swift -o .build/render-sprites
 .build/render-sprites Assets/Sprites .build/release/Sprites Assets/Sprites-preview.png
+mkdir -p .build/release/Fonts 'dist/Token Jump.app/Contents/Resources/Fonts'
+cp Assets/Fonts/* .build/release/Fonts/
+cp Assets/Fonts/* 'dist/Token Jump.app/Contents/Resources/Fonts/'
 mkdir -p 'dist/Token Jump.app/Contents/Resources/Sprites'
 cp .build/release/Sprites/*.png 'dist/Token Jump.app/Contents/Resources/Sprites/'
 mkdir -p 'dist/Token Jump.app/Contents/MacOS'
