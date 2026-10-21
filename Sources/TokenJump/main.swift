@@ -24,11 +24,11 @@ enum GameFont {
 }
 
 enum Difficulty: String, CaseIterable {
-    case easy, normal, hard
-    var title: String { switch self { case .easy: return "쉬움"; case .normal: return "보통"; case .hard: return "하드" } }
-    var cost: Int { switch self { case .easy: return 5_000; case .normal: return 10_000; case .hard: return 25_000 } }
-    var width: CGFloat { switch self { case .easy: return 120; case .normal: return 90; case .hard: return 60 } }
-    var gap: CGFloat { switch self { case .easy: return 72; case .normal: return 85; case .hard: return 95 } }
+    case normal, hard, hardcore
+    var title: String { self == .normal ? "보통" : (self == .hard ? "어려움" : "하드코어") }
+    var cost: Int { self == .normal ? 10_000 : 25_000 }
+    var width: CGFloat { self == .normal ? 90 : 60 }
+    var gap: CGFloat { self == .normal ? 85 : 95 }
 }
 enum Avatar: String, CaseIterable {
     case bit, ember, orbit
@@ -41,8 +41,10 @@ struct Stage {
     let rise: CGFloat
     func width(_ mode: Difficulty) -> CGFloat {
         let index = Stage.all.firstIndex(where: { $0.name == name }) ?? 0
+        if mode == .hardcore { return max(40, 44 - CGFloat(index) * 0.2) }
         let hasSpikes = [4, 8, 10, 11].contains(index)
-        return max(hasSpikes ? 52 : 32, mode.width * (1 - CGFloat(index) * 0.034))
+        if mode == .normal && index < 2 { return 110 }
+        return max(hasSpikes ? 52 : (mode == .normal ? 44 : 32), mode.width * (1 - CGFloat(index) * 0.034))
     }
     static let all: [Stage] = [
         Stage(name: "첫 도약", xs: [210, 245, 200, 250, 195], rise: 0.80),
@@ -56,16 +58,29 @@ struct Stage {
         Stage(name: "가시 계곡", xs: [340, 180, 55, 215, 370, 210, 55, 215, 370], rise: 0.70),
         Stage(name: "상단 포격", xs: [60, 220, 370, 210, 50, 210, 370, 210, 50, 210, 370], rise: 0.71),
         Stage(name: "정상 직전", xs: [365, 205, 45, 205, 365, 205, 45, 205, 365, 205, 45, 205], rise: 0.72),
-        Stage(name: "토큰 정상", xs: [45, 210, 375, 210, 45, 210, 375, 210, 45, 210, 375, 210, 45], rise: 0.72)
+        Stage(name: "토큰 정상", xs: [45, 210, 375, 210, 45, 210, 375, 210, 45, 210, 375, 210, 45], rise: 0.72),
+        Stage(name: "승강 협곡", xs: [70, 210, 350, 220, 85, 215, 350, 215, 75, 210], rise: 0.70),
+        Stage(name: "닫힌 다리", xs: [345, 210, 75, 200, 340, 205, 70, 210, 350, 215, 75], rise: 0.69),
+        Stage(name: "역풍 계곡", xs: [75, 215, 350, 210, 70, 205, 345, 215, 80, 220, 355], rise: 0.68),
+        Stage(name: "포격 회랑", xs: [350, 210, 65, 205, 350, 215, 75, 210, 345, 205, 65, 210], rise: 0.70),
+        Stage(name: "스위치 요새", xs: [65, 200, 345, 170, 80, 210, 350, 215, 75, 205, 345, 210], rise: 0.69),
+        Stage(name: "열쇠 첨탑", xs: [355, 215, 70, 205, 345, 210, 75, 215, 350, 205, 65, 210, 350], rise: 0.68),
+        Stage(name: "무너진 정상", xs: [70, 210, 350, 205, 65, 210, 355, 215, 75, 210, 345, 205, 70], rise: 0.70),
+        Stage(name: "마지막 도약", xs: [350, 210, 65, 205, 345, 210, 70, 215, 350, 210, 65, 205, 345], rise: 0.71)
     ]
     func points(_ mode: Difficulty) -> [CGPoint] {
         let number = Stage.all.firstIndex(where: { $0.name == name }) ?? 0
+        if mode == .hardcore {
+            let route = (0..<13).map { [CGFloat(65), 210, 355, 210][($0 + number) % 4] }
+            return route.enumerated().map { CGPoint(x: $0.element, y: 50 + CGFloat($0.offset) * (67 + CGFloat(number) * 0.25)) }
+        }
         let route: [CGFloat] = mode == .hard && number < 8 ? (0..<(7 + number / 2)).map { [CGFloat(65), 210, 355, 210][$0 % 4] } : xs
-        let spacing = mode == .hard && number < 8 ? CGFloat(0.75) : rise
+        let spacing = mode == .normal && number < 2 ? CGFloat(0.70) : (mode == .hard && number < 8 ? CGFloat(0.75) : rise)
         return route.enumerated().map { CGPoint(x: $0.element, y: 50 + CGFloat($0.offset) * mode.gap * spacing) }
     }
 }
 struct Save: Codable {
+    var starterJumpsRemaining: Int?
     var runStarted: Bool?
     var runComplete: Bool?
     var clearedStages: Int?
@@ -87,7 +102,7 @@ final class Usage {
     var difficulty: Difficulty { Difficulty(rawValue: save.difficulty ?? "normal") ?? .normal }
     var threshold: Int { difficulty.cost }
     var wallet: Int { save.credits * 10_000 + save.remainder }
-    var available: Int { wallet / threshold }
+    var available: Int { wallet / threshold + max(0, save.starterJumpsRemaining ?? 0) }
     func addTokens(_ count: Int) {
         let total = wallet + count
         save.credits = total / 10_000; save.remainder = total % 10_000
@@ -117,11 +132,15 @@ final class Usage {
     let url: URL
     var save: Save
     var onChange: (() -> Void)?
-    init(stateDirectory: URL? = nil) {
+    init(starterJumps: Int = 30, stateDirectory: URL? = nil) {
         let dir = stateDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("TokenJump")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         url = dir.appendingPathComponent("save.json")
+        let isNewSave = !FileManager.default.fileExists(atPath: url.path)
         save = (try? JSONDecoder().decode(Save.self, from: Data(contentsOf: url))) ?? Save()
+        if isNewSave { save.starterJumpsRemaining = max(0, starterJumps); persist() }
+        if save.difficulty == "easy" { save.difficulty = Difficulty.normal.rawValue; persist() }
+        if (save.runComplete ?? false) && (save.clearedStages ?? 0) < Stage.all.count { save.runComplete = false; persist() }
         if save.clearedStages == nil {
             // Old freely-selected stage numbers are not evidence of a sequential clear.
             save.clearedStages = 0; save.stage = 1; save.runStarted = false; save.runComplete = false; persist()
@@ -129,6 +148,11 @@ final class Usage {
     }
     func persist() { if let data = try? JSONEncoder().encode(save) { try? data.write(to: url, options: .atomic) } }
     func spend() -> Bool {
+        if (save.starterJumpsRemaining ?? 0) > 0 {
+            save.starterJumpsRemaining = (save.starterJumpsRemaining ?? 0) - 1
+            save.jumpCount = (save.jumpCount ?? 0) + 1
+            persist(); onChange?(); return true
+        }
         guard wallet >= threshold else { return false }
         save.spent = (save.spent ?? 0) + threshold; save.jumpCount = (save.jumpCount ?? 0) + 1
         addTokens(-threshold); persist(); onChange?(); return true
@@ -229,9 +253,10 @@ final class Game: SKScene {
     var motionClock: TimeInterval = 0
     var horizontalVelocity: CGFloat = 0
     var iceDrift = false
-    var railIndices: [Int] { mechanicsEnabled ? ([3: [2], 6: [2], 8: [2, 4], 10: [3, 8], 11: [2, 8], 12: [4, 8, 10]][stage] ?? []).filter { $0 != spikeTier } : [] }
-    var keyTiers: [Int] { mechanicsEnabled ? ([5: [1], 9: [3, 6], 12: [4, 8]][stage] ?? []).filter { $0 < platforms.count - 1 } : [] }
-    var switchLink: (source: Int, target: Int)? { mechanicsEnabled ? [3: (1, 2), 8: (1, 2), 11: (6, 7)][stage] : nil }
+    var mechanicStage: Int { if usage.difficulty == .hardcore { return [12, 11, 10, 9][(stage - 1) % 4] }; return stage <= 12 ? stage : ([13: 6, 14: 8, 15: 9, 16: 10, 17: 11, 18: 12, 19: 11, 20: 12][stage] ?? 12) }
+    var railIndices: [Int] { mechanicsEnabled ? ([3: [2], 6: [2], 8: [2, 4], 10: [3, 8], 11: [2, 8], 12: [4, 8, 10]][mechanicStage] ?? []).filter { $0 != spikeTier } : [] }
+    var keyTiers: [Int] { mechanicsEnabled ? ([5: [1], 9: [3, 6], 12: [4, 8]][mechanicStage] ?? []).filter { $0 < platforms.count - 1 } : [] }
+    var switchLink: (source: Int, target: Int)? { mechanicsEnabled ? [3: (1, 2), 8: (1, 2), 11: (6, 7)][mechanicStage] : nil }
     var collectedKeys = Set<Int>()
     var switchOn = false
     var keyNodes: [Int: SKNode] = [:]
@@ -255,27 +280,27 @@ final class Game: SKScene {
             if platformNodes.indices.contains(link.target) { platformNodes[link.target].isHidden = false }
         }
     }
-    var switchOffset: CGFloat { guard let link = switchLink else { return 0 }; return min(20, ledgeWidth(link.source) / 3) }
+    var switchOffset: CGFloat { guard let link = switchLink else { return 0 }; return min(20, max(14, ledgeWidth(link.source) / 3)) }
     var liftIndices: [Int] {
         guard mechanicsEnabled else { return [] }
-        let candidates = [2: [1], 4: [1], 6: [4], 8: [1], 10: [1, 7], 11: [7], 12: [1, 9]][stage] ?? (usage.difficulty == .hard && stage == 1 ? [1] : [])
+        let candidates = [2: [1], 4: [1], 6: [4], 8: [1], 10: [1, 7], 11: [7], 12: [1, 9]][mechanicStage] ?? (usage.difficulty != .normal && stage == 1 ? [1] : [])
         return candidates.filter { $0 > 0 && $0 < platforms.count - 1 && $0 % 6 != 0 && $0 != spikeTier && !railIndices.contains($0) && !blinkIndices.contains($0) && !crumbleIndices.contains($0) && !iceIndices.contains($0) }
     }
-    var liftAmplitude: CGFloat { usage.difficulty == .easy ? 10 : (usage.difficulty == .normal ? 12 : 14) }
-    var liftPeriod: TimeInterval { usage.difficulty == .easy ? 4.4 : (usage.difficulty == .normal ? 3.8 : 3.2) }
-    var iceIndices: [Int] { mechanicsEnabled ? ([5: [1], 7: [1, 3], 9: [2, 4, 7], 11: [1, 4, 9], 12: [3, 7, 11]][stage] ?? []) : [] }
-    var blinkIndices: [Int] { mechanicsEnabled ? (usage.difficulty == .hard ? [spikeTier == 2 ? 4 : 2] : (stage >= 4 ? [2] : [])).filter { $0 < platforms.count - 1 && $0 != spikeTier } : [] }
-    var crumbleIndices: [Int] { mechanicsEnabled ? (usage.difficulty == .hard ? [3, 5] : (stage >= 3 ? [3] : [])).filter { $0 < platforms.count - 1 && $0 != spikeTier } : [] }
+    var liftAmplitude: CGFloat { usage.difficulty == .normal ? 12 : 14 }
+    var liftPeriod: TimeInterval { usage.difficulty == .normal ? 3.8 : 3.2 }
+    var iceIndices: [Int] { mechanicsEnabled ? ([5: [1], 7: [1, 3], 9: [2, 4, 7], 11: [1, 4, 9], 12: [3, 7, 11]][mechanicStage] ?? []) : [] }
+    var blinkIndices: [Int] { mechanicsEnabled ? (usage.difficulty != .normal ? [spikeTier == 2 ? 4 : 2] : (stage >= 4 ? [2] : [])).filter { $0 < platforms.count - 1 && $0 != spikeTier } : [] }
+    var crumbleIndices: [Int] { mechanicsEnabled ? (usage.difficulty != .normal ? [3, 5] : (stage >= 3 ? [3] : [])).filter { $0 < platforms.count - 1 && $0 != spikeTier } : [] }
     var crumbleAt: [Int: TimeInterval] = [:]
     var rotors: [(center: CGPoint, node: SKNode)] = []
-    var spikeTier: Int? { mechanicsEnabled ? ([5: 2, 9: 1, 11: 3, 12: 2][stage] ?? (usage.difficulty == .hard && stage >= 3 ? 4 : nil)) : nil }
+    var spikeTier: Int? { mechanicsEnabled ? ([5: 2, 9: 1, 11: 3, 12: 2][mechanicStage] ?? (usage.difficulty != .normal && stage >= 3 ? 4 : nil)) : nil }
     func platformActive(_ index: Int) -> Bool {
         if let link = switchLink, index == link.target && !switchOn { return false }
         if blinkIndices.contains(index) && (motionClock + Double(index) * 0.3).truncatingRemainder(dividingBy: 3.6) >= 2.5 { return false }
         if let touched = crumbleAt[index] { let elapsed = motionClock - touched; if elapsed >= crumbleDelay && elapsed < crumbleDelay + 3 { return false } }
         return true
     }
-    var crumbleDelay: TimeInterval { usage.difficulty == .hard ? 0.45 : 0.8 }
+    var crumbleDelay: TimeInterval { if usage.difficulty == .hardcore { return 0.38 }; return usage.difficulty != .normal ? 0.45 : 0.8 }
     var railAmplitude: CGFloat { stage < 6 ? 20 : (stage < 10 ? 25 : 30) }
     var railPeriod: TimeInterval { stage < 6 ? 4.8 : (stage < 10 ? 4.2 : 3.6) }
     var walls: [CGRect] = []
@@ -292,9 +317,9 @@ final class Game: SKScene {
     var immuneUntil: TimeInterval = 0
     var shots: [CannonShot] = []
     let warningLine = SKShapeNode(rectOf: CGSize(width: 384, height: 2))
-    var hasCannons: Bool { combatEnabled && [4, 6, 7, 8, 10, 11, 12].contains(stage) }
+    var hasCannons: Bool { combatEnabled && [4, 6, 7, 8, 10, 11, 12].contains(mechanicStage) }
     var fireInterval: TimeInterval {
-        let base = usage.difficulty == .easy ? 3.4 : (usage.difficulty == .normal ? 2.7 : 2.1)
+        let base = usage.difficulty == .normal ? 2.7 : 2.1
         return max(0.95, base - Double(stage - 1) * 0.075)
     }
     var platformWidth: CGFloat { Stage.all[stage - 1].width(usage.difficulty) }
@@ -302,8 +327,29 @@ final class Game: SKScene {
         let spikes = spikeTier
         if index == spikes { return max(100, platformWidth) }
         guard stage >= 9, index != spikes, [3, 5, 8, 10, 11].contains(index) else { return platformWidth }
-        let minimum: CGFloat = usage.difficulty == .easy ? 48 : (usage.difficulty == .normal ? 36 : 26)
+        let minimum: CGFloat = usage.difficulty == .normal ? 36 : 26
         return max(minimum, platformWidth * 0.58)
+    }
+    var ghost: SKShapeNode?
+    func updateGhost(dt: TimeInterval) {
+        guard usage.difficulty == .hardcore, mechanicsEnabled, attemptStarted, !cleared else { return }
+        if ghost == nil {
+            let node = SKShapeNode(ellipseOf: CGSize(width: 26, height: 30))
+            node.fillColor = .systemPurple; node.strokeColor = .white; node.glowWidth = 3
+            node.name = "obstacle"; node.zPosition = 20
+            node.position = CGPoint(x: player.position.x, y: player.position.y - 130)
+            for x: CGFloat in [-5, 5] {
+                let eye = SKShapeNode(circleOfRadius: 3); eye.fillColor = .white
+                eye.position = CGPoint(x: x, y: 4); node.addChild(eye)
+            }
+            addChild(node); ghost = node
+        }
+        guard let ghost else { return }
+        let dx = player.position.x - ghost.position.x, dy = player.position.y - ghost.position.y
+        let distance = hypot(dx, dy)
+        let step = min(distance, (22 + CGFloat(stage) * 0.7) * dt)
+        if distance > 0 { ghost.position.x += dx / distance * step; ghost.position.y += dy / distance * step }
+        if distance < 25 { restoreCheckpoint(); notice = "유령 접촉! 첫 발판으로 복귀"; hitNoticeUntil = last + 1.5 }
     }
     var roomIndex = 0
     let roomCamera = SKCameraNode()
@@ -319,8 +365,8 @@ final class Game: SKScene {
         childNode(withName: "flag")?.isHidden = platforms.count - 1 > end
         for node in children where node.name == "cannon" { node.position.y = cannonY }
     }
-    var cannonFromLeft: Bool { [4, 7, 10, 12].contains(stage) }
-    var cannonTier: Int { [10, 12].contains(stage) ? 3 : ([6, 8, 11].contains(stage) ? 2 : 1) }
+    var cannonFromLeft: Bool { [4, 7, 10, 12].contains(mechanicStage) }
+    var cannonTier: Int { [10, 12].contains(mechanicStage) ? 3 : ([6, 8, 11].contains(mechanicStage) ? 2 : 1) }
     var cannonY: CGFloat { basePlatforms.count > cannonTier ? basePlatforms[min(roomIndex * 6 + cannonTier, basePlatforms.count - 2)].y + 45 : 250 }
     var velocity: CGFloat = 0
     var grounded = true
@@ -346,6 +392,7 @@ final class Game: SKScene {
         loadStage()
     }
     func loadStage() {
+        ghost?.removeFromParent(); ghost = nil
         keys.removeAll(); velocity = 0; grounded = true; cleared = false; last = 0
         hitNoticeUntil = 0; notice = ""; recoil = 0; knockedBack = false; attemptStarted = false
         combatClock = 0; nextShotAt = 1.5; shotNumber = 0; immuneUntil = 0; clearShots()
@@ -392,8 +439,8 @@ final class Game: SKScene {
             let offset: CGFloat = stage % 3 == 0 ? 0 : (stage % 3 == 1 ? -22 : 22)
             hazards = [CGRect(x: ledge.x + offset - 6, y: ledge.y + 6, width: 12, height: 12)]
         }
-        if mechanicsEnabled && (usage.difficulty == .hard || stage >= 6) {
-            let candidates = usage.difficulty == .hard && stage >= 7 ? [1, 5, 9] : [1]
+        if mechanicsEnabled && (usage.difficulty != .normal || stage >= 6) {
+            let candidates = usage.difficulty != .normal && stage >= 7 ? [1, 5, 9] : [1]
             // A rotor above a hairpin also blocks the incoming jump's apex.
             let safeTiers = (1..<(platforms.count - 1)).filter { i in
                 i != spikeTier && i + 1 != spikeTier && (platforms[i].x - platforms[i - 1].x) * (platforms[i + 1].x - platforms[i].x) > 0
@@ -402,11 +449,11 @@ final class Game: SKScene {
             if tiers.isEmpty, let fallback = safeTiers.first { tiers = [fallback] }
             for tier in tiers where tier + 1 < platforms.count {
                 let a = platforms[tier], b = platforms[tier + 1]
-                let center = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 + (usage.difficulty == .hard ? 10 : (usage.difficulty == .normal ? 0 : -12)))
+                let center = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 + (usage.difficulty != .normal ? 10 : 0))
                 let rotor = SKNode(); rotor.position = center; rotor.name = "obstacle"; rotor.zPosition = 3; addChild(rotor)
                 let hub = SKShapeNode(circleOfRadius: 7); hub.fillColor = .darkGray; hub.strokeColor = .systemRed; rotor.addChild(hub)
                 for arm in 0..<4 {
-                    for radius: CGFloat in (usage.difficulty == .easy ? [9, 17, 25] : (usage.difficulty == .normal ? [11, 21, 31] : [13, 25, 37])) {
+                    for radius: CGFloat in (usage.difficulty == .normal ? [11, 21, 31] : [13, 25, 37]) {
                         let tooth = SKShapeNode(rectOf: CGSize(width: 9, height: 9)); tooth.zRotation = .pi / 4
                         tooth.fillColor = .systemRed; tooth.strokeColor = .systemOrange
                         let angle = CGFloat(arm) * .pi / 2
@@ -463,7 +510,7 @@ final class Game: SKScene {
         if let link = switchLink {
             let button = SKShapeNode(rectOf: CGSize(width: 14, height: 5), cornerRadius: 2); button.fillColor = .systemOrange; button.strokeColor = .white; button.lineWidth = 1; button.position = CGPoint(x: switchOffset, y: 9); platformNodes[link.source].addChild(button); switchNode = button
         }
-        if mechanicsEnabled && [4, 7, 9, 10, 12].contains(stage) {
+        if mechanicsEnabled && [4, 7, 9, 10, 12].contains(mechanicStage) {
             for first in stride(from: 0, to: platforms.count - 2, by: 6) {
                 let y = basePlatforms[min(first + 2, platforms.count - 2)].y + 12
                 let band = CGRect(x: 20, y: y, width: 380, height: 62); windBands.append(band)
@@ -540,7 +587,7 @@ final class Game: SKScene {
             else { let drag: CGFloat = grounded ? 45 : 15; horizontalVelocity = max(0, abs(horizontalVelocity) - drag * dt) * (horizontalVelocity < 0 ? -1 : 1) }
         } else { horizontalVelocity = direction * 190; if grounded { iceDrift = false } }
         let inWind = !grounded && windBands.contains { $0.contains(player.position) }
-        let targetWind: CGFloat = inWind ? windDirection * (usage.difficulty == .hard ? 55 : 35) : 0
+        let targetWind: CGFloat = inWind ? windDirection * (usage.difficulty != .normal ? 55 : 35) : 0
         windDrift += (targetWind - windDrift) * min(1, dt * 5)
         let previousX = player.position.x
         player.position.x = min(408, max(12, player.position.x + (horizontalVelocity + recoil + windDrift) * dt))
@@ -591,6 +638,7 @@ final class Game: SKScene {
             restoreCheckpoint(); velocity = 0; grounded = true; knockedBack = false; recoil = 0
         }
         updateCannons(dt: dt)
+        updateGhost(dt: dt)
 
     }
     func railBounds(index: Int) -> ClosedRange<CGFloat> {
@@ -616,7 +664,7 @@ final class Game: SKScene {
             let start = gust.userData?["originX"] as? CGFloat ?? 30
             gust.position.x = 20 + (start - 20 + CGFloat(motionClock) * 24 * windDirection + 100000).truncatingRemainder(dividingBy: 380)
         }
-        for rotor in rotors { rotor.node.zRotation = CGFloat(motionClock) * (usage.difficulty == .hard ? 2.2 : 1.35) }
+        for rotor in rotors { rotor.node.zRotation = CGFloat(motionClock) * (usage.difficulty != .normal ? 2.2 : 1.35) }
         for index in liftIndices where basePlatforms.indices.contains(index) {
             platforms[index].y = basePlatforms[index].y + sin(motionClock * 2 * .pi / liftPeriod) * liftAmplitude
             if platformNodes.indices.contains(index) { platformNodes[index].position = platforms[index] }
@@ -645,7 +693,7 @@ final class Game: SKScene {
         let ball = CannonShot(circleOfRadius: 9)
         ball.fillColor = .systemOrange; ball.strokeColor = .systemYellow; ball.lineWidth = 1.5; ball.zPosition = 6
         ball.position = CGPoint(x: fromLeft ? 55 : 365, y: cannonY + 3)
-        ball.flightSpeed = (fromLeft ? 1 : -1) * ((usage.difficulty == .hard ? 245 : 205) + CGFloat(stage - 1) * 5)
+        ball.flightSpeed = (fromLeft ? 1 : -1) * ((usage.difficulty != .normal ? 245 : 205) + CGFloat(stage - 1) * 5)
         if let art = GameArt.sprite("cannonball", size: CGSize(width: 18, height: 18)) { ball.fillColor = .clear; ball.strokeColor = .clear; ball.addChild(art) }
         let trail = SKShapeNode(rectOf: CGSize(width: 20, height: 4), cornerRadius: 2); trail.fillColor = .systemOrange; trail.strokeColor = .clear; trail.alpha = 0.4; trail.position.x = fromLeft ? -13 : 13; ball.addChild(trail)
         addChild(ball); shots.append(ball)
@@ -692,6 +740,15 @@ final class Game: SKScene {
 
 // Explicitly forward keyboard events to the scene after the popover takes focus.
 final class GameView: SKView {
+    var onReady: (() -> Void)?
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { DispatchQueue.main.async { [weak self] in self?.onReady?() } }
+    }
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        DispatchQueue.main.async { [weak self] in self?.onReady?() }
+    }
     override var acceptsFirstResponder: Bool { true }
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 { scene?.keyDown(with: event); return }
@@ -701,9 +758,11 @@ final class GameView: SKView {
     override func keyUp(with event: NSEvent) { scene?.keyUp(with: event) }
 }
 
+final class StageGrid: NSView { override var isFlipped: Bool { true } }
+
 final class App: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     let demo = CommandLine.arguments.contains("--demo")
-    lazy var usage = Usage(stateDirectory: demo ? FileManager.default.temporaryDirectory.appendingPathComponent(CommandLine.arguments.contains("--ui-test") ? "TokenJump-ui-test-" + UUID().uuidString : "TokenJump-demo") : nil)
+    lazy var usage = Usage(starterJumps: demo ? 0 : 30, stateDirectory: demo ? FileManager.default.temporaryDirectory.appendingPathComponent(CommandLine.arguments.contains("--ui-test") ? "TokenJump-ui-test-" + UUID().uuidString : "TokenJump-demo") : nil)
     var status: NSStatusItem!
     let popover = NSPopover()
     var gameView: GameView!
@@ -719,6 +778,7 @@ final class App: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     var selectionHint: NSTextField!
     var stageHint: NSTextField!
     var stageButtons: [NSButton] = []
+    var stageScroll: NSScrollView!
     var selectedStage = 1
     var choosingStage = true
     var emptyHint: NSTextField!
@@ -742,7 +802,10 @@ final class App: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             self.status.button?.toolTip = "TokenJump · 점프 \(self.usage.available)회"
             self.refreshUsage()
         }
-        if demo { usage.save.credits = 500; usage.onChange?() } else { usage.scan() }
+        if demo {
+            if usage.wallet == 0 && usage.save.jumpCount == nil { usage.save.credits = 500; usage.persist() }
+            usage.onChange?()
+        } else { usage.scan() }
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in if self?.demo == false { self?.usage.scan() } }; timer?.tolerance = 10
 
         let controller = NSViewController()
@@ -752,6 +815,10 @@ final class App: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         gameView = GameView(frame: NSRect(x: 0, y: 0, width: 420, height: 560))
         gameView.preferredFramesPerSecond = 30
+        gameView.onReady = { [weak self] in
+            guard let self = self, self.popover.isShown, self.isGameTab, !self.choosingStage else { return }
+            self.resumeGame()
+        }
         scene = Game(usage: usage)
         scene.onDismiss = { [weak self] in self?.popover.performClose(nil) }
         scene.onContinue = { [weak self] in guard let self = self else { return }; self.continueAfterClear(self.completionButton) }
@@ -828,11 +895,15 @@ final class App: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         difficultyPicker.frame = NSRect(x: 22, y: 430, width: 376, height: 30); selectionPanel.addSubview(difficultyPicker)
         selectionHint = text("", size: 11, color: .secondaryLabelColor, frame: NSRect(x: 22, y: 386, width: 376, height: 38), parent: selectionPanel)
         _ = text("스테이지", size: 13, weight: .medium, frame: NSRect(x: 22, y: 351, width: 376, height: 22), parent: selectionPanel)
+        stageScroll = NSScrollView(frame: NSRect(x: 22, y: 112, width: 376, height: 232))
+        stageScroll.hasVerticalScroller = true; stageScroll.autohidesScrollers = false; stageScroll.drawsBackground = false
+        let grid = StageGrid(frame: NSRect(x: 0, y: 0, width: 360, height: CGFloat((Stage.all.count + 2) / 3) * 57))
+        stageScroll.documentView = grid; selectionPanel.addSubview(stageScroll)
         for (index, stage) in Stage.all.enumerated() {
             let button = NSButton(title: "", target: self, action: #selector(pickStage(_:)))
             button.font = GameFont.font(12); button.tag = index + 1; button.bezelStyle = .regularSquare; button.setButtonType(.pushOnPushOff)
-            button.frame = NSRect(x: 22 + (index % 3) * 128, y: 283 - (index / 3) * 57, width: 120, height: 49)
-            button.toolTip = stage.name; selectionPanel.addSubview(button); stageButtons.append(button)
+            button.frame = NSRect(x: (index % 3) * 120, y: (index / 3) * 57, width: 112, height: 49)
+            button.toolTip = stage.name; grid.addSubview(button); stageButtons.append(button)
         }
         stageHint = text("", size: 11, color: .secondaryLabelColor, frame: NSRect(x: 22, y: 94, width: 376, height: 20), parent: selectionPanel)
         let start = NSButton(title: "선택한 스테이지 시작", target: self, action: #selector(startSelectedStage))
@@ -847,7 +918,7 @@ final class App: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         difficultyPicker.isEnabled = usage.canChangeDifficulty
         selectionHint.stringValue = "점프 1회당 \(usage.threshold.formatted()) 토큰" + (usage.canChangeDifficulty ? " · 시작 전에 난이도를 선택하세요." : "\n도전 중에는 고정됩니다. 전체 클리어 후 변경할 수 있어요.")
         let rules = [1: "기본 도약", 2: "승강 발판의 높이를 보고 도약하세요.", 3: "주황색 버튼을 밟으면 다음 발판이 켜집니다.", 4: "바람과 포격 사이로 이동하세요.", 5: "발판 위 열쇠를 모으면 골인이 열립니다.", 6: "회전 가시와 이동 발판을 통과하세요.", 7: "빙판의 미끄러짐과 역풍에 주의하세요.", 8: "버튼으로 발판을 켜고 사라지기 전에 건너세요.", 9: "열쇠 2개를 모아 바람 구간을 통과하세요.", 10: "바람 속에서 움직이는 발판에 올라타세요.", 11: "위쪽 구간 버튼으로 마지막 길을 여세요.", 12: "열쇠 2개를 모아 모든 장애물을 통과하세요."]
-        stageHint?.stringValue = rules[selectedStage] ?? ""
+        stageHint?.stringValue = rules[selectedStage] ?? rules[[13: 6, 14: 8, 15: 9, 16: 10, 17: 11, 18: 12, 19: 11, 20: 12][selectedStage] ?? 12] ?? ""
         for button in stageButtons {
             let unlocked = button.tag <= usage.unlockedStage
             let done = button.tag <= (usage.save.clearedStages ?? 0)
@@ -864,6 +935,7 @@ final class App: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
     @objc func showSelection() {
         selectedStage = scene.stage; choosingStage = true; pauseGame(); refreshSelection(); updateGameScreen()
+        stageButtons[selectedStage - 1].scrollToVisible(stageButtons[selectedStage - 1].bounds)
     }
     @objc func pickStage(_ sender: NSButton) {
         guard sender.tag <= usage.unlockedStage else { return }
@@ -879,6 +951,7 @@ final class App: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         guard usage.selectStage(selectedStage) else { return }
         scene.loadStage(); choosingStage = false; updateGameScreen()
         if popover.isShown { resumeGame() }
+        resumeAfterPresentation()
     }
     func text(_ value: String, size: CGFloat, weight: NSFont.Weight = .regular, color: NSColor = .labelColor, frame: NSRect, parent: NSView) -> NSTextField {
         let label = NSTextField(labelWithString: value); label.font = .systemFont(ofSize: size, weight: weight); label.textColor = color; label.frame = frame
@@ -894,7 +967,8 @@ final class App: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             value.font = .monospacedDigitSystemFont(ofSize: prominent ? 20 : 14, weight: .medium); value.alignment = .right; statLabels[key] = value
         }
         row("남은 점프", key: "ready", y: 505, prominent: true)
-        statLabels["rate"] = text("", size: 11, color: .secondaryLabelColor, frame: NSRect(x: 22, y: 468, width: 376, height: 24), parent: usagePanel)
+        statLabels["bonus"] = text("", size: 11, color: .secondaryLabelColor, frame: NSRect(x: 22, y: 483, width: 376, height: 18), parent: usagePanel)
+        statLabels["rate"] = text("", size: 11, color: .secondaryLabelColor, frame: NSRect(x: 22, y: 459, width: 376, height: 24), parent: usagePanel)
         chargeProgress = NSProgressIndicator(frame: NSRect(x: 22, y: 449, width: 376, height: 4)); chargeProgress.style = .bar; chargeProgress.isIndeterminate = false; chargeProgress.minValue = 0; chargeProgress.maxValue = 1; usagePanel.addSubview(chargeProgress)
         rule(426)
         row("보유 토큰", key: "wallet", y: 389)
@@ -914,6 +988,8 @@ final class App: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         updateGameScreen()
         guard usagePanel != nil else { return }
         statLabels["ready"]?.stringValue = "\(usage.available.formatted())회"
+        let bonus = usage.save.starterJumpsRemaining ?? 0
+        statLabels["bonus"]?.stringValue = bonus > 0 ? "시작 보너스 \(bonus)회 · 보너스를 먼저 사용합니다" : ""
         let remaining = usage.threshold - usage.wallet % usage.threshold
         statLabels["rate"]?.stringValue = "\(usage.difficulty.title) · 1회 \(usage.threshold.formatted()) 토큰 · 다음 1회까지 \(remaining.formatted())"
         chargeProgress.doubleValue = Double(usage.wallet % usage.threshold) / Double(usage.threshold)
@@ -928,7 +1004,21 @@ final class App: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         refreshUsage(); updateCompletion()
         if isGameTab && popover.isShown { resumeGame() } else { pauseGame() }
     }
-    func resumeGame() { guard !choosingStage && isGameTab else { pauseGame(); return }; scene.last = 0; scene.isPaused = false; gameView.isPaused = false; restoreFocus() }
+    func resumeGame() {
+        guard !choosingStage && isGameTab else { pauseGame(); return }
+        // Resume the renderer before its scene; visibility changes can pause SKView again.
+        gameView.isPaused = false; scene.isPaused = false; scene.last = 0
+        gameView.needsDisplay = true
+        gameView.window?.makeKey()
+        gameView.window?.makeFirstResponder(gameView)
+        restoreFocus()
+    }
+    func resumeAfterPresentation() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.popover.isShown, self.isGameTab, !self.choosingStage else { return }
+            self.resumeGame()
+        }
+    }
     static func makeStatusIcon() -> NSImage {
         let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
             NSColor.black.setStroke()
@@ -977,7 +1067,12 @@ final class App: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         guard Avatar.allCases.indices.contains(sender.tag) else { return }
         usage.save.avatar = Avatar.allCases[sender.tag].rawValue; usage.persist(); scene.applyAvatar(); restoreFocus()
     }
-    func restoreFocus() { DispatchQueue.main.async { [weak self] in self?.gameView.window?.makeFirstResponder(self?.gameView) } }
+    func restoreFocus() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, !self.choosingStage, self.isGameTab, !self.gameView.isHidden else { return }
+            self.gameView.window?.makeFirstResponder(self.gameView)
+        }
+    }
     @objc func changeDifficulty(_ sender: NSMenuItem) {
         guard Difficulty.allCases.indices.contains(sender.tag) else { return }
         guard usage.setDifficulty(Difficulty.allCases[sender.tag]) else { return }
@@ -994,11 +1089,36 @@ final class App: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     func popoverDidShow(_ notification: Notification) {
         gameView.window?.makeKey()
         gameView.window?.makeFirstResponder(gameView)
-        if isGameTab { resumeGame() } else { pauseGame(); refreshUsage() }
+        if isGameTab { resumeGame(); resumeAfterPresentation() } else { pauseGame(); refreshUsage() }
     }
     func popoverWillClose(_ notification: Notification) { pauseGame(); usage.persist() }
     func detachableWindow(for popover: NSPopover) -> NSWindow? { nil }
     func applicationWillTerminate(_ notification: Notification) { usage.persist() }
+}
+if CommandLine.arguments.contains("--starter-test") {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("TokenJump-starter-" + UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let usage = Usage(stateDirectory: dir)
+    verify(usage.wallet == 0 && usage.available == 30)
+    verify(usage.setDifficulty(.hard) && usage.available == 30)
+    for _ in 0..<30 { verify(usage.spend()) }
+    verify(!usage.spend() && usage.wallet == 0 && (usage.save.spent ?? 0) == 0 && usage.save.jumpCount == 30)
+    let reopened = Usage(stateDirectory: dir); verify(reopened.available == 0)
+    reopened.addTokens(25000); verify(reopened.spend() && reopened.wallet == 0 && reopened.save.spent == 25000)
+    reopened.save.starterJumpsRemaining = nil; reopened.persist()
+    verify(Usage(stateDirectory: dir).available == 0)
+    print("PASS: 30 starter jumps, difficulty-independent, bonus-first spending, no fake token income, persistent exhaustion, no legacy regrant")
+    exit(0)
+}
+if CommandLine.arguments.contains("--usage-probe") {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("TokenJump-live-probe")
+    let usage = Usage(starterJumps: 0, stateDirectory: dir)
+    let first = !usage.save.initialized, before = usage.save.collected ?? 0
+    usage.scan()
+    print("baseline=\(first) files=\(usage.save.offsets.count) newTokens=\((usage.save.collected ?? 0) - before) collected=\(usage.save.collected ?? 0) providers=\(usage.save.providerTokens ?? [:])")
+    let balance = usage.wallet; usage.scan(); verify(usage.wallet == balance)
+    print("PASS: immediate rescan does not double-credit")
+    exit(0)
 }
 if CommandLine.arguments.contains("--self-test") {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -1009,7 +1129,7 @@ if CommandLine.arguments.contains("--self-test") {
     let file = logs.appendingPathComponent("session.jsonl")
     func event(_ count: Int) -> String { "{\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"total_tokens\":\(count)}}}}\n" }
     try! Data(event(50000).utf8).write(to: file)
-    let usage = Usage(stateDirectory: dir.appendingPathComponent("state"))
+    let usage = Usage(starterJumps: 0, stateDirectory: dir.appendingPathComponent("state"))
     usage.scan(roots: [(logs, true)])
     verify(usage.save.credits == 0)
     let handle = try! FileHandle(forWritingTo: file); try! handle.seekToEnd()
@@ -1018,7 +1138,7 @@ if CommandLine.arguments.contains("--self-test") {
     verify(usage.save.credits == 2 && usage.save.remainder == 5000)
     usage.scan(roots: [(logs, true)]); verify(usage.save.credits == 2)
     verify(usage.spend() && usage.spend() && !usage.spend())
-    let restored = Usage(stateDirectory: dir.appendingPathComponent("state"))
+    let restored = Usage(starterJumps: 0, stateDirectory: dir.appendingPathComponent("state"))
     verify(restored.save.credits == 0 && restored.save.remainder == 5000)
     let claude = logs.appendingPathComponent("claude.jsonl")
     let record = "{\"type\":\"assistant\",\"message\":{\"id\":\"test-message\",\"usage\":{\"input_tokens\":5000,\"output_tokens\":1000}}}\n"
@@ -1036,10 +1156,10 @@ if CommandLine.arguments.contains("--self-test") {
     restored.addTokens(50_000)
     verify(restored.available == 2)
     verify(restored.spend() && restored.wallet == balance + 25_000)
-    restored.setDifficulty(.easy)
-    verify(restored.available == restored.wallet / 5_000)
-    let legacy = Usage(stateDirectory: dir.appendingPathComponent("state"))
-    verify(legacy.difficulty == .easy && legacy.wallet == restored.wallet)
+    restored.setDifficulty(.normal)
+    verify(restored.available == restored.wallet / 10_000)
+    let legacy = Usage(starterJumps: 0, stateDirectory: dir.appendingPathComponent("state"))
+    verify(legacy.difficulty == .normal && legacy.wallet == restored.wallet)
     for mode in Difficulty.allCases {
         // Vertical apex must clear the top of the next platform.
         verify(420.0 * 420.0 / (2 * 850) > Double(mode.gap))
@@ -1068,13 +1188,18 @@ if CommandLine.arguments.contains("--self-test") {
             verify(!spike.intersects(CGRect(x: ledge.x - 12, y: ledge.y + 6, width: 24, height: 30)))
         }
     }
+    let migrationDir = dir.appendingPathComponent("migration")
+    let migration = Usage(starterJumps: 0, stateDirectory: migrationDir)
+    migration.save.difficulty = "easy"; migration.save.stage = 12; migration.save.clearedStages = 12; migration.save.runComplete = true; migration.addTokens(123456); migration.persist()
+    let migrated = Usage(starterJumps: 0, stateDirectory: migrationDir)
+    verify(migrated.difficulty == .normal && migrated.wallet == 123456 && migrated.unlockedStage == 13 && migrated.save.runComplete == false)
     let oldData = Data("{\"credits\":2,\"remainder\":500,\"offsets\":{},\"totals\":{},\"initialized\":true,\"best\":0}".utf8)
     let oldSave = try! JSONDecoder().decode(Save.self, from: oldData)
     verify(oldSave.credits == 2 && oldSave.avatar == nil)
     restored.save.avatar = "orbit"; restored.save.stage = 12; restored.persist()
-    let settings = Usage(stateDirectory: dir.appendingPathComponent("state"))
+    let settings = Usage(starterJumps: 0, stateDirectory: dir.appendingPathComponent("state"))
     verify(settings.save.avatar == "orbit" && settings.save.stage == 12)
-    print("PASS: 12 stages × 3 modes reachable, legacy saves, avatar/stage persistence")
+    print("PASS: 20 stages × 3 modes reachable, legacy saves, avatar/stage persistence")
     print("PASS: difficulty rates, wallet conservation, persisted settings, reachable gaps;")
     print("PASS: baseline, incremental credit, duplicate scan/message, spending, persistence")
     exit(0)
@@ -1086,7 +1211,11 @@ if CommandLine.arguments.contains("--ui-test") {
     controller.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
     verify(controller.popover.contentSize == NSSize(width: 420, height: 640))
     verify(controller.status.button?.title == "" && controller.status.button?.image?.isTemplate == true)
-    verify(controller.tabs.segmentCount == 2 && controller.tabs.label(forSegment: 0) == "게임" && controller.tabs.label(forSegment: 1) == "사용량")
+    verify(controller.tabs.segmentCount == 3 && controller.tabs.label(forSegment: 0) == "게임" && controller.tabs.label(forSegment: 1) == "사용량")
+    verify(controller.stageScroll.documentView!.frame.height > controller.stageScroll.contentSize.height)
+    controller.stageScroll.contentView.scroll(to: NSPoint(x: 0, y: 160))
+    verify(controller.stageScroll.contentView.bounds.origin.y > 0)
+    controller.stageScroll.contentView.scroll(to: .zero)
     controller.tabs.selectedSegment = 1; controller.changeTab(controller.tabs)
     verify(controller.gameView.isHidden && controller.gameView.isPaused && controller.scene.isPaused && !controller.usagePanel.isHidden)
     let before = controller.usage.wallet
@@ -1096,9 +1225,13 @@ if CommandLine.arguments.contains("--ui-test") {
     for item in controller.usagePanel.subviews { verify(controller.usagePanel.bounds.contains(item.frame)) }
     controller.tabs.selectedSegment = 0; controller.changeTab(controller.tabs)
     verify(controller.choosingStage && controller.gameView.isHidden && !controller.selectionPanel.isHidden && controller.usagePanel.isHidden)
-    verify(controller.stageButtons.count == 12 && !controller.stageButtons[1].isEnabled)
+    verify(controller.stageButtons.count == 20 && controller.difficultyPicker.segmentCount == 3 && !controller.stageButtons[1].isEnabled)
     controller.gameView.keyDown(with: jump); verify(controller.usage.wallet == before)
     controller.startSelectedStage()
+    controller.pauseGame(); controller.resumeGame()
+    verify(!controller.gameView.isPaused && !controller.scene.isPaused)
+    controller.scene.update(100); let firstMotion = controller.scene.motionClock
+    controller.scene.update(100 + 1.0 / 30); verify(controller.scene.motionClock > firstMotion)
     verify(!controller.gameView.isHidden && controller.selectionPanel.isHidden)
     controller.usage.save.stage = 1; controller.usage.save.clearedStages = 0; controller.usage.save.runStarted = true
     controller.scene.loadStage(); verify(controller.completionPanel.isHidden)
@@ -1107,8 +1240,8 @@ if CommandLine.arguments.contains("--ui-test") {
     verify(controller.completionButton.title == "다음 스테이지 →")
     controller.scene.keyDown(with: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)!)
     verify(controller.scene.stage == 2 && controller.completionPanel.isHidden)
-    controller.usage.save.stage = 12; controller.usage.save.clearedStages = 11; controller.scene.loadStage()
-    controller.scene.cleared = true; controller.usage.finishStage(12); controller.scene.onStageChange?()
+    controller.usage.save.stage = 20; controller.usage.save.clearedStages = 19; controller.scene.loadStage()
+    controller.scene.cleared = true; controller.usage.finishStage(20); controller.scene.onStageChange?()
     verify(!controller.completionPanel.isHidden && controller.completionButton.title == "난이도 선택" && controller.usage.canChangeDifficulty)
     controller.tabs.selectedSegment = 1; controller.changeTab(controller.tabs); verify(controller.completionPanel.isHidden)
     controller.showSelection(); verify(controller.difficultyPicker.isEnabled && controller.selectionPanel.isHidden)
@@ -1127,12 +1260,12 @@ if CommandLine.arguments.contains("--ui-test") {
 if CommandLine.arguments.contains("--hazard-test") {
     _ = NSApplication.shared
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("TokenJump-hazards-" + UUID().uuidString)
-    let usage = Usage(stateDirectory: dir); defer { try? FileManager.default.removeItem(at: dir) }
+    let usage = Usage(starterJumps: 0, stateDirectory: dir); defer { try? FileManager.default.removeItem(at: dir) }
     let scene = Game(usage: usage); scene.combatEnabled = false
     let view = GameView(frame: NSRect(x: 0, y: 0, width: 420, height: 560)); view.presentScene(scene)
     for mode in Difficulty.allCases {
         usage.save.runStarted = false; usage.setDifficulty(mode)
-        for number in 1...12 {
+        for number in 1...Stage.all.count {
             usage.save.stage = number; scene.loadStage(); scene.switchOn = true
             verify(scene.children.filter { $0.name == "rail" }.isEmpty)
             verify(scene.platformActive(0) && scene.platformActive(scene.platforms.count - 1))
@@ -1201,7 +1334,24 @@ if CommandLine.arguments.contains("--hazard-test") {
             verify(scene.checkpointIndex == 0 && scene.roomIndex == 0 && scene.player.position == scene.checkpoint && scene.crumbleAt.isEmpty)
         }
     }
-    print("PASS: 36 layouts, hard obstacles from stage 1, no rail guides, invisible ledges cannot support jumps, timed recovery, crumble recovery, rotor collisions, first-platform reset")
+    usage.save.runStarted = false; usage.setDifficulty(.hardcore)
+    for number in 1...Stage.all.count {
+        usage.save.stage = number; scene.loadStage()
+        scene.updateGhost(dt: 1); verify(scene.ghost == nil)
+        usage.save.credits = 1000; scene.tryJump()
+        scene.updateGhost(dt: 0); verify(scene.ghost != nil)
+        let start = scene.ghost!.position
+        scene.updateGhost(dt: 1.0 / 60)
+        verify(scene.ghost!.position.y > start.y && scene.ghost!.position.y < scene.player.position.y - 25)
+        scene.cleared = true; let frozen = scene.ghost!.position
+        scene.updateGhost(dt: 1); verify(scene.ghost!.position == frozen)
+        scene.cleared = false; scene.ghost!.position = scene.player.position
+        let wallet = usage.wallet
+        scene.updateGhost(dt: 0)
+        verify(scene.ghost == nil && !scene.attemptStarted && scene.player.position == scene.checkpoint && usage.wallet == wallet)
+    }
+    print("PASS: 20 hardcore ghost spawn, pursuit, clear freeze, contact reset and no extra debit")
+    print("PASS: 60 layouts, hard obstacles from stage 1, no rail guides, invisible ledges cannot support jumps, timed recovery, crumble recovery, rotor collisions, first-platform reset")
     exit(0)
 }
 if CommandLine.arguments.contains("--font-test") {
@@ -1219,12 +1369,12 @@ if CommandLine.arguments.contains("--font-test") {
 if CommandLine.arguments.contains("--feature-test") {
     _ = NSApplication.shared
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("TokenJump-features-" + UUID().uuidString)
-    let usage = Usage(stateDirectory: dir); defer { try? FileManager.default.removeItem(at: dir) }
+    let usage = Usage(starterJumps: 0, stateDirectory: dir); defer { try? FileManager.default.removeItem(at: dir) }
     let scene = Game(usage: usage); scene.combatEnabled = false
     let view = GameView(frame: NSRect(x: 0, y: 0, width: 420, height: 560)); view.presentScene(scene)
     for mode in Difficulty.allCases {
         usage.save.runStarted = false; usage.setDifficulty(mode)
-        for stage in [3, 8, 11] {
+        for stage in [3, 8, 11, 14, 17, 19] {
             usage.save.stage = stage; scene.loadStage(); scene.rotors.removeAll(); scene.hazards = []
             let link = scene.switchLink!
             verify(!scene.platformActive(link.target) && scene.platformNodes[link.target].isHidden)
@@ -1234,7 +1384,7 @@ if CommandLine.arguments.contains("--feature-test") {
             verify(scene.switchOn && scene.platformActive(link.target) && !scene.platformNodes[link.target].isHidden)
             scene.restoreCheckpoint(); verify(!scene.switchOn && !scene.platformActive(link.target))
         }
-        for stage in [5, 9, 12] {
+        for stage in [5, 9, 12, 15, 18, 20] {
             usage.save.stage = stage; scene.loadStage(); scene.rotors.removeAll(); scene.hazards = []
             let goal = scene.platforms.count - 1
             scene.player.position = CGPoint(x: scene.platforms[goal].x, y: scene.platforms[goal].y + 22); scene.velocity = -20; scene.grounded = false; scene.last = 1
@@ -1249,7 +1399,7 @@ if CommandLine.arguments.contains("--feature-test") {
             scene.update(2 + 1.0 / 30); verify(scene.cleared)
             scene.restoreCheckpoint(); verify(scene.collectedKeys.isEmpty && !scene.goalUnlocked)
         }
-        for stage in [4, 7, 9, 10, 12] {
+        for stage in [4, 7, 9, 10, 12, 15, 16, 18, 20] {
             usage.save.stage = stage; scene.loadStage(); scene.rotors.removeAll(); scene.hazards = []
             verify(!scene.windBands.isEmpty && scene.windNodes.count <= 14)
             let band = scene.windBands[0]
@@ -1267,7 +1417,7 @@ if CommandLine.arguments.contains("--feature-test") {
 if CommandLine.arguments.contains("--hazard-preview") {
     _ = NSApplication.shared
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("TokenJump-preview-" + UUID().uuidString)
-    let usage = Usage(stateDirectory: dir); defer { try? FileManager.default.removeItem(at: dir) }
+    let usage = Usage(starterJumps: 0, stateDirectory: dir); defer { try? FileManager.default.removeItem(at: dir) }
     usage.setDifficulty(.hard); usage.save.credits = 10
     let scene = Game(usage: usage), view = GameView(frame: NSRect(x: 0, y: 0, width: 420, height: 560))
     view.presentScene(scene); scene.motionClock = 0.6; scene.movePlatforms(dt: 0); scene.refreshHUD()
@@ -1290,11 +1440,11 @@ if CommandLine.arguments.contains("--art-test") {
 if CommandLine.arguments.contains("--progression-test") {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: dir) }
-    let usage = Usage(stateDirectory: dir)
+    let usage = Usage(starterJumps: 0, stateDirectory: dir)
     usage.addTokens(200_000)
     verify(usage.setDifficulty(.hard) && !usage.selectStage(2))
     usage.save.runStarted = true; usage.persist()
-    verify(!usage.setDifficulty(.easy) && usage.difficulty == .hard && !usage.advanceStage())
+    verify(!usage.setDifficulty(.normal) && usage.difficulty != .normal && !usage.advanceStage())
     let wallet = usage.wallet
     for number in 1...Stage.all.count {
         verify(usage.save.stage == number)
@@ -1302,9 +1452,9 @@ if CommandLine.arguments.contains("--progression-test") {
         if number < Stage.all.count { verify(!usage.canChangeDifficulty && usage.advanceStage()) }
     }
     verify(usage.canChangeDifficulty && usage.save.runComplete == true)
-    verify(usage.setDifficulty(.easy) && usage.save.stage == 1 && usage.unlockedStage == 1 && usage.wallet == wallet)
+    verify(usage.setDifficulty(.normal) && usage.save.stage == 1 && usage.unlockedStage == 1 && usage.wallet == wallet)
     usage.save.runStarted = true; usage.finishStage(1); verify(usage.advanceStage())
-    let restored = Usage(stateDirectory: dir)
+    let restored = Usage(starterJumps: 0, stateDirectory: dir)
     verify(!restored.canChangeDifficulty && restored.save.stage == 2 && restored.unlockedStage == 2 && !restored.selectStage(3))
     restored.finishStage(12); verify(restored.save.runComplete == false)
     print("PASS: difficulty locks on first jump, sequential stage gate, full-clear unlock, new-run reset, wallet preserved, restart persistence, no skip")
@@ -1314,7 +1464,7 @@ if CommandLine.arguments.contains("--platform-test") {
     _ = NSApplication.shared
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: dir) }
-    let usage = Usage(stateDirectory: dir); usage.save.credits = 100
+    let usage = Usage(starterJumps: 0, stateDirectory: dir); usage.save.credits = 100
     let scene = Game(usage: usage); scene.combatEnabled = false
     let view = GameView(frame: NSRect(x: 0, y: 0, width: 420, height: 560)); view.presentScene(scene)
     func jump() { scene.keyDown(with: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, characters: " ", charactersIgnoringModifiers: " ", isARepeat: false, keyCode: 49)!) }
@@ -1381,7 +1531,7 @@ if CommandLine.arguments.contains("--combat-test") {
     _ = NSApplication.shared
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: dir) }
-    let usage = Usage(stateDirectory: dir)
+    let usage = Usage(starterJumps: 0, stateDirectory: dir)
     let scene = Game(usage: usage)
     let view = GameView(frame: NSRect(x: 0, y: 0, width: 420, height: 560)); view.presentScene(scene)
     func jump() {
@@ -1442,9 +1592,9 @@ if CommandLine.arguments.contains("--combat-test") {
             }
         }
     }
-    print("PASS: all 36 map/mode layouts, at most one cannon, correct firing side, count-only HUD, no path overlay")
-    let recovered = Usage(stateDirectory: dir)
-    verify((recovered.save.spent ?? 0) > 0 && (recovered.save.jumpCount ?? 0) >= 3)
+    print("PASS: all 40 map/mode layouts, at most one cannon, correct firing side, count-only HUD, no path overlay")
+    let recovered = Usage(starterJumps: 0, stateDirectory: dir)
+    verify((recovered.save.spent ?? 0) > 0 && (recovered.save.jumpCount ?? 0) >= Difficulty.allCases.count)
     print("PASS: single-credit start all modes, visible idle firing, no path overlay, single-side cannon, directional recoil, air jump rejected after impact, hit immunity, empty reserve, paused combat clock, saved spending")
     exit(0)
 }
@@ -1452,7 +1602,7 @@ if CommandLine.arguments.contains("--game-test") {
     _ = NSApplication.shared
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: dir) }
-    let usage = Usage(stateDirectory: dir)
+    let usage = Usage(starterJumps: 0, stateDirectory: dir)
     let scene = Game(usage: usage)
     scene.combatEnabled = false
     scene.mechanicsEnabled = false
@@ -1545,7 +1695,7 @@ if CommandLine.arguments.contains("--game-test") {
     print("PASS: walking off both ledge edges falls at 30/60/120 FPS with no jump debit")
     print("PASS: 30FPS edge landing, ground-only jump, no buffering/coyote/midair spam, icon template/size")
     print("PASS: walls block left/right/head and support landing; hazard respawn has no debit; one-way upward pass and downward landing")
-    print("PASS: 108 stage/mode/FPS playthroughs, simultaneous movement/jump, 684 landings, exact debit, clear lock, pause, empty wallet, 3 avatars, fixed scene")
+    print("PASS: 120 stage/mode/FPS playthroughs, simultaneous movement/jump, exact debit, clear lock, pause, empty wallet, 3 avatars, fixed scene")
     exit(0)
 }
 let app = NSApplication.shared
