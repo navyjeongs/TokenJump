@@ -212,6 +212,32 @@ final class Game: SKScene {
     var horizontalVelocity: CGFloat = 0
     var iceDrift = false
     var railIndices: [Int] { mechanicsEnabled ? ([3: [2], 6: [2], 8: [2, 4], 10: [3, 8], 11: [2, 8], 12: [4, 8, 10]][stage] ?? []).filter { $0 != spikeTier } : [] }
+    var keyTiers: [Int] { mechanicsEnabled ? ([5: [1], 9: [3, 6], 12: [4, 8]][stage] ?? []).filter { $0 < platforms.count - 1 } : [] }
+    var switchLink: (source: Int, target: Int)? { mechanicsEnabled ? [3: (1, 2), 8: (1, 2), 11: (6, 7)][stage] : nil }
+    var collectedKeys = Set<Int>()
+    var switchOn = false
+    var keyNodes: [Int: SKNode] = [:]
+    var switchNode: SKShapeNode?
+    var windDrift: CGFloat = 0
+    var windBands: [CGRect] = []
+    var windNodes: [SKNode] = []
+    var goalUnlocked: Bool { keyTiers.allSatisfy { collectedKeys.contains($0) } }
+    var windDirection: CGFloat { stage % 2 == 0 ? 1 : -1 }
+    func checkInteractions() {
+        let body = CGRect(x: player.position.x - 12, y: player.position.y - 15, width: 24, height: 30)
+        for index in keyTiers where platformActive(index) && !collectedKeys.contains(index) {
+            let pickup = CGRect(x: platforms[index].x - 12, y: platforms[index].y + 21, width: 24, height: 14)
+            if pickup.intersects(body) { collectedKeys.insert(index); keyNodes[index]?.isHidden = true }
+        }
+        childNode(withName: "flag")?.alpha = goalUnlocked ? 1 : 0.35
+        childNode(withName: "flag")?.childNode(withName: "lock")?.isHidden = goalUnlocked
+        guard let index = supportIndex, grounded else { return }
+        if let link = switchLink, index == link.source, abs(player.position.x - platforms[index].x - switchOffset) < 12 {
+            switchOn = true; switchNode?.fillColor = .systemGreen
+            if platformNodes.indices.contains(link.target) { platformNodes[link.target].isHidden = false }
+        }
+    }
+    var switchOffset: CGFloat { guard let link = switchLink else { return 0 }; return min(20, ledgeWidth(link.source) / 3) }
     var liftIndices: [Int] {
         guard mechanicsEnabled else { return [] }
         let candidates = [2: [1], 4: [1], 6: [4], 8: [1], 10: [1, 7], 11: [7], 12: [1, 9]][stage] ?? (usage.difficulty == .hard && stage == 1 ? [1] : [])
@@ -226,6 +252,7 @@ final class Game: SKScene {
     var rotors: [(center: CGPoint, node: SKNode)] = []
     var spikeTier: Int? { mechanicsEnabled ? ([5: 2, 9: 1, 11: 3, 12: 2][stage] ?? (usage.difficulty == .hard && stage >= 3 ? 4 : nil)) : nil }
     func platformActive(_ index: Int) -> Bool {
+        if let link = switchLink, index == link.target && !switchOn { return false }
         if blinkIndices.contains(index) && (motionClock + Double(index) * 0.3).truncatingRemainder(dividingBy: 3.6) >= 2.5 { return false }
         if let touched = crumbleAt[index] { let elapsed = motionClock - touched; if elapsed >= crumbleDelay && elapsed < crumbleDelay + 3 { return false } }
         return true
@@ -305,12 +332,13 @@ final class Game: SKScene {
         hitNoticeUntil = 0; notice = ""; recoil = 0; knockedBack = false; attemptStarted = false
         combatClock = 0; nextShotAt = 1.5; shotNumber = 0; immuneUntil = 0; clearShots()
         platforms = Stage.all[stage - 1].points(usage.difficulty)
+        collectedKeys.removeAll(); switchOn = false; keyNodes.removeAll(); switchNode = nil; windDrift = 0; windBands.removeAll(); windNodes.removeAll()
         crumbleAt.removeAll(); rotors.removeAll()
         basePlatforms = platforms; previousPlatforms = platforms; platformNodes.removeAll()
         roomIndex = 0
         supportIndex = 0; checkpointIndex = 0; motionClock = 0; horizontalVelocity = 0; iceDrift = false
         checkpoint = CGPoint(x: platforms[0].x, y: 71); player.position = checkpoint
-        children.filter { $0.name == "platform" || $0.name == "flag" || $0.name == "obstacle" || $0.name == "cannon" || $0.name == "rail" }.forEach { $0.removeFromParent() }
+        children.filter { $0.name == "platform" || $0.name == "flag" || $0.name == "obstacle" || $0.name == "cannon" || $0.name == "rail" || $0.name == "wind" }.forEach { $0.removeFromParent() }
         for (i, p) in platforms.enumerated() {
             let node = SKShapeNode(rectOf: CGSize(width: ledgeWidth(i), height: 12), cornerRadius: 6)
             node.fillColor = i == platforms.count - 1 ? .systemYellow : .systemIndigo; node.strokeColor = .clear; node.position = p; node.name = "platform"; addChild(node); platformNodes.append(node)
@@ -397,8 +425,37 @@ final class Game: SKScene {
                 }
             }
         }
+        buildStageFeatures()
         setRoom(for: 0)
         refreshHUD(); onStageChange?()
+    }
+    func buildStageFeatures() {
+        let palettes: [NSColor] = [NSColor(calibratedRed: 0.04, green: 0.06, blue: 0.13, alpha: 1), NSColor(calibratedRed: 0.035, green: 0.10, blue: 0.105, alpha: 1), NSColor(calibratedRed: 0.12, green: 0.065, blue: 0.06, alpha: 1), NSColor(calibratedRed: 0.085, green: 0.05, blue: 0.13, alpha: 1)]
+        backgroundColor = palettes[((stage - 1) / 3) % palettes.count]
+        for index in keyTiers {
+            let key = SKNode(); key.position = CGPoint(x: 0, y: 28); platformNodes[index].addChild(key); keyNodes[index] = key
+            let ring = SKShapeNode(circleOfRadius: 5); ring.strokeColor = .systemYellow; ring.lineWidth = 2; ring.position.x = -6; key.addChild(ring)
+            let shaft = CGMutablePath(); shaft.move(to: CGPoint(x: -1, y: 0)); shaft.addLine(to: CGPoint(x: 10, y: 0)); shaft.addLine(to: CGPoint(x: 10, y: -4)); shaft.move(to: CGPoint(x: 6, y: 0)); shaft.addLine(to: CGPoint(x: 6, y: -3))
+            let stem = SKShapeNode(path: shaft); stem.strokeColor = .systemYellow; stem.lineWidth = 2; key.addChild(stem)
+        }
+        if !keyTiers.isEmpty, let flag = childNode(withName: "flag") {
+            let lock = SKShapeNode(rectOf: CGSize(width: 12, height: 10), cornerRadius: 2); lock.fillColor = .systemYellow; lock.strokeColor = .clear; lock.position = CGPoint(x: -14, y: 14); lock.name = "lock"
+            let loop = SKShapeNode(rectOf: CGSize(width: 8, height: 10), cornerRadius: 4); loop.strokeColor = .systemYellow; loop.fillColor = .clear; loop.lineWidth = 2; loop.position.y = 5; lock.addChild(loop); flag.addChild(lock); flag.alpha = 0.35
+        }
+        if let link = switchLink {
+            let button = SKShapeNode(rectOf: CGSize(width: 14, height: 5), cornerRadius: 2); button.fillColor = .systemOrange; button.strokeColor = .white; button.lineWidth = 1; button.position = CGPoint(x: switchOffset, y: 9); platformNodes[link.source].addChild(button); switchNode = button
+        }
+        if mechanicsEnabled && [4, 7, 9, 10, 12].contains(stage) {
+            for first in stride(from: 0, to: platforms.count - 2, by: 6) {
+                let y = basePlatforms[min(first + 2, platforms.count - 2)].y + 12
+                let band = CGRect(x: 20, y: y, width: 380, height: 62); windBands.append(band)
+                for index in 0..<7 {
+                    let path = CGMutablePath(); path.move(to: CGPoint(x: -4 * windDirection, y: -3)); path.addLine(to: .zero); path.addLine(to: CGPoint(x: -4 * windDirection, y: 3))
+                    let gust = SKShapeNode(path: path); gust.strokeColor = .systemTeal; gust.alpha = 0.3; gust.lineWidth = 1.4; gust.name = "wind"; gust.zPosition = -0.3
+                    gust.position = CGPoint(x: 30 + CGFloat(index) * 54, y: y + 12 + CGFloat(index % 3) * 18); gust.userData = ["originX": gust.position.x]; addChild(gust); windNodes.append(gust)
+                }
+            }
+        }
     }
     func applyAvatar() {
         let avatar = Avatar(rawValue: usage.save.avatar ?? "bit") ?? .bit
@@ -464,8 +521,11 @@ final class Game: SKScene {
             if direction != 0 { horizontalVelocity = min(230, max(-230, horizontalVelocity + direction * 560 * dt)) }
             else { let drag: CGFloat = grounded ? 45 : 15; horizontalVelocity = max(0, abs(horizontalVelocity) - drag * dt) * (horizontalVelocity < 0 ? -1 : 1) }
         } else { horizontalVelocity = direction * 190; if grounded { iceDrift = false } }
+        let inWind = !grounded && windBands.contains { $0.contains(player.position) }
+        let targetWind: CGFloat = inWind ? windDirection * (usage.difficulty == .hard ? 55 : 35) : 0
+        windDrift += (targetWind - windDrift) * min(1, dt * 5)
         let previousX = player.position.x
-        player.position.x = min(408, max(12, player.position.x + (horizontalVelocity + recoil) * dt))
+        player.position.x = min(408, max(12, player.position.x + (horizontalVelocity + recoil + windDrift) * dt))
         recoil *= max(0, 1 - 3.2 * dt)
         resolveWallsHorizontally(from: previousX)
         let previousY = player.position.y
@@ -499,10 +559,12 @@ final class Game: SKScene {
                 player.position.x = min(p.x + ledgeWidth(index) / 2 + 11.5, max(p.x - ledgeWidth(index) / 2 - 11.5, player.position.x))
                 setRoom(for: index)
                 if crumbleIndices.contains(index) && crumbleAt[index] == nil { crumbleAt[index] = motionClock }
-                if platforms.count > 1 && index == platforms.count - 1 { cleared = true; clearShots(); usage.finishStage(stage); usage.save.best = max(usage.save.best, stage); usage.persist(); keys.removeAll(); onStageChange?() }
+                checkInteractions()
+                if platforms.count > 1 && index == platforms.count - 1 && goalUnlocked { cleared = true; clearShots(); usage.finishStage(stage); usage.save.best = max(usage.save.best, stage); usage.persist(); keys.removeAll(); onStageChange?() }
             }
         }
         let body = CGRect(x: player.position.x - 12, y: player.position.y - 15, width: 24, height: 30)
+        checkInteractions()
         if hazards.contains(where: { $0.intersects(body) }) || rotorHits(body) {
             restoreCheckpoint(); velocity = 0; grounded = true; keys.removeAll(); hitNoticeUntil = time + 1.5; notice = "위험물! 첫 발판으로 복귀"
         }
@@ -531,6 +593,10 @@ final class Game: SKScene {
             let warning = blinkIndices.contains(index) && phase > 2.1
             let cracking = crumbleAt[index] != nil
             node.alpha = warning || cracking ? (sin(motionClock * 28) > 0 ? 0.4 : 1) : 1
+        }
+        for gust in windNodes {
+            let start = gust.userData?["originX"] as? CGFloat ?? 30
+            gust.position.x = 20 + (start - 20 + CGFloat(motionClock) * 24 * windDirection + 100000).truncatingRemainder(dividingBy: 380)
         }
         for rotor in rotors { rotor.node.zRotation = CGFloat(motionClock) * (usage.difficulty == .hard ? 2.2 : 1.35) }
         for index in liftIndices where basePlatforms.indices.contains(index) {
@@ -633,6 +699,7 @@ final class App: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     var selectionPanel: NSView!
     var difficultyPicker: NSSegmentedControl!
     var selectionHint: NSTextField!
+    var stageHint: NSTextField!
     var stageButtons: [NSButton] = []
     var selectedStage = 1
     var choosingStage = true
@@ -747,6 +814,7 @@ final class App: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             button.frame = NSRect(x: 22 + (index % 3) * 128, y: 283 - (index / 3) * 57, width: 120, height: 49)
             button.toolTip = stage.name; selectionPanel.addSubview(button); stageButtons.append(button)
         }
+        stageHint = text("", size: 11, color: .secondaryLabelColor, frame: NSRect(x: 22, y: 94, width: 376, height: 20), parent: selectionPanel)
         let start = NSButton(title: "선택한 스테이지 시작", target: self, action: #selector(startSelectedStage))
         start.bezelStyle = .rounded; start.frame = NSRect(x: 22, y: 55, width: 376, height: 38); selectionPanel.addSubview(start)
         _ = text("A / D 이동 · Space 점프 · R 다시 시작", size: 11, color: .secondaryLabelColor, frame: NSRect(x: 22, y: 20, width: 376, height: 22), parent: selectionPanel)
@@ -757,6 +825,8 @@ final class App: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         difficultyPicker.selectedSegment = Difficulty.allCases.firstIndex(of: usage.difficulty) ?? 1
         difficultyPicker.isEnabled = usage.canChangeDifficulty
         selectionHint.stringValue = "점프 1회당 \(usage.threshold.formatted()) 토큰" + (usage.canChangeDifficulty ? " · 시작 전에 난이도를 선택하세요." : "\n도전 중에는 고정됩니다. 전체 클리어 후 변경할 수 있어요.")
+        let rules = [1: "기본 도약", 2: "승강 발판의 높이를 보고 도약하세요.", 3: "주황색 버튼을 밟으면 다음 발판이 켜집니다.", 4: "바람과 포격 사이로 이동하세요.", 5: "발판 위 열쇠를 모으면 골인이 열립니다.", 6: "회전 가시와 이동 발판을 통과하세요.", 7: "빙판의 미끄러짐과 역풍에 주의하세요.", 8: "버튼으로 발판을 켜고 사라지기 전에 건너세요.", 9: "열쇠 2개를 모아 바람 구간을 통과하세요.", 10: "바람 속에서 움직이는 발판에 올라타세요.", 11: "위쪽 구간 버튼으로 마지막 길을 여세요.", 12: "열쇠 2개를 모아 모든 장애물을 통과하세요."]
+        stageHint?.stringValue = rules[selectedStage] ?? ""
         for button in stageButtons {
             let unlocked = button.tag <= usage.unlockedStage
             let done = button.tag <= (usage.save.clearedStages ?? 0)
@@ -1039,7 +1109,7 @@ if CommandLine.arguments.contains("--hazard-test") {
     for mode in Difficulty.allCases {
         usage.save.runStarted = false; usage.setDifficulty(mode)
         for number in 1...12 {
-            usage.save.stage = number; scene.loadStage()
+            usage.save.stage = number; scene.loadStage(); scene.switchOn = true
             verify(scene.children.filter { $0.name == "rail" }.isEmpty)
             verify(scene.platformActive(0) && scene.platformActive(scene.platforms.count - 1))
             if mode == .hard { verify(!scene.rotors.isEmpty && !scene.blinkIndices.isEmpty && !scene.crumbleIndices.isEmpty) }
@@ -1069,7 +1139,9 @@ if CommandLine.arguments.contains("--hazard-test") {
                     for offset: CGFloat in [0, -24, 24, -40, 40] {
                     for sourceShift: CGFloat in (scene.spikeTier == target - 1 ? [-28, 28, -42, 42] : [0, -20, 20]) {
                     for launchDelay in (scene.rotors.isEmpty ? [0.0] : [0.0, 0.10, 0.18]) {
-                        scene.loadStage(); scene.motionClock = Double(phase) * 0.2; scene.movePlatforms(dt: 0)
+                        scene.loadStage(); scene.switchOn = scene.switchLink.map { target - 1 >= $0.source } ?? false
+                        scene.collectedKeys = Set(scene.keyTiers.filter { $0 < target })
+                        scene.motionClock = Double(phase) * 0.2; scene.movePlatforms(dt: 0)
                         guard scene.platformActive(target - 1), abs(offset) < scene.ledgeWidth(target) / 2 + 8 else { continue }
                         var source = scene.platforms[target - 1]
                         source.x += sourceShift
@@ -1106,6 +1178,54 @@ if CommandLine.arguments.contains("--hazard-test") {
         }
     }
     print("PASS: 36 layouts, hard obstacles from stage 1, no rail guides, invisible ledges cannot support jumps, timed recovery, crumble recovery, rotor collisions, first-platform reset")
+    exit(0)
+}
+if CommandLine.arguments.contains("--feature-test") {
+    _ = NSApplication.shared
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("TokenJump-features-" + UUID().uuidString)
+    let usage = Usage(stateDirectory: dir); defer { try? FileManager.default.removeItem(at: dir) }
+    let scene = Game(usage: usage); scene.combatEnabled = false
+    let view = GameView(frame: NSRect(x: 0, y: 0, width: 420, height: 560)); view.presentScene(scene)
+    for mode in Difficulty.allCases {
+        usage.save.runStarted = false; usage.setDifficulty(mode)
+        for stage in [3, 8, 11] {
+            usage.save.stage = stage; scene.loadStage(); scene.rotors.removeAll(); scene.hazards = []
+            let link = scene.switchLink!
+            verify(!scene.platformActive(link.target) && scene.platformNodes[link.target].isHidden)
+            scene.player.position = CGPoint(x: scene.platforms[link.source].x, y: scene.platforms[link.source].y + 21); scene.supportIndex = link.source; scene.grounded = true
+            scene.checkInteractions(); verify(!scene.switchOn)
+            scene.player.position.x += scene.switchOffset; scene.checkInteractions()
+            verify(scene.switchOn && scene.platformActive(link.target) && !scene.platformNodes[link.target].isHidden)
+            scene.restoreCheckpoint(); verify(!scene.switchOn && !scene.platformActive(link.target))
+        }
+        for stage in [5, 9, 12] {
+            usage.save.stage = stage; scene.loadStage(); scene.rotors.removeAll(); scene.hazards = []
+            let goal = scene.platforms.count - 1
+            scene.player.position = CGPoint(x: scene.platforms[goal].x, y: scene.platforms[goal].y + 22); scene.velocity = -20; scene.grounded = false; scene.last = 1
+            scene.update(1 + 1.0 / 30)
+            verify(!scene.cleared && !scene.goalUnlocked)
+            for index in scene.keyTiers {
+                scene.player.position = CGPoint(x: scene.platforms[index].x, y: scene.platforms[index].y + 21); scene.supportIndex = index; scene.grounded = true
+                scene.checkInteractions(); verify(scene.collectedKeys.contains(index) && scene.keyNodes[index]!.isHidden)
+            }
+            verify(scene.goalUnlocked)
+            scene.player.position = CGPoint(x: scene.platforms[goal].x, y: scene.platforms[goal].y + 22); scene.velocity = -20; scene.grounded = false; scene.last = 2
+            scene.update(2 + 1.0 / 30); verify(scene.cleared)
+            scene.restoreCheckpoint(); verify(scene.collectedKeys.isEmpty && !scene.goalUnlocked)
+        }
+        for stage in [4, 7, 9, 10, 12] {
+            usage.save.stage = stage; scene.loadStage(); scene.rotors.removeAll(); scene.hazards = []
+            verify(!scene.windBands.isEmpty && scene.windNodes.count <= 14)
+            let band = scene.windBands[0]
+            scene.player.position = CGPoint(x: 210, y: band.midY); scene.grounded = false; scene.supportIndex = nil; scene.velocity = 200; scene.last = 3
+            let balance = usage.wallet
+            scene.update(3 + 1.0 / 30)
+            verify(scene.windDrift * scene.windDirection > 0 && usage.wallet == balance)
+            let clock = scene.motionClock; scene.suspend(); verify(scene.motionClock == clock)
+            scene.restoreCheckpoint(); verify(scene.windDrift == 0)
+        }
+    }
+    print("PASS: all modes, switches require plate contact and reset, keys lock goal until collected and reset on fall, directional air wind/no debit/pause/reset")
     exit(0)
 }
 if CommandLine.arguments.contains("--hazard-preview") {
@@ -1163,13 +1283,13 @@ if CommandLine.arguments.contains("--platform-test") {
     let view = GameView(frame: NSRect(x: 0, y: 0, width: 420, height: 560)); view.presentScene(scene)
     func jump() { scene.keyDown(with: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, characters: " ", charactersIgnoringModifiers: " ", isARepeat: false, keyCode: 49)!) }
     var clock: TimeInterval = 1
-    usage.save.stage = 3; scene.loadStage(); scene.supportIndex = 2
+    usage.save.stage = 3; scene.loadStage(); scene.switchOn = true; scene.supportIndex = 2
     scene.player.position = CGPoint(x: scene.platforms[2].x, y: scene.platforms[2].y + 21); scene.grounded = true
     scene.update(clock)
     let firstX = scene.player.position.x
     for _ in 0..<45 { clock += 1.0 / 60; scene.update(clock) }
     verify(abs(scene.player.position.x - firstX) > 5 && abs(scene.player.position.x - scene.platforms[2].x) < 0.1 && scene.grounded)
-    scene.loadStage(); scene.supportIndex = 1; scene.player.position = CGPoint(x: scene.platforms[1].x, y: scene.platforms[1].y + 21); scene.update(clock)
+    scene.loadStage(); scene.supportIndex = 1; scene.player.position = CGPoint(x: scene.platforms[1].x + scene.switchOffset, y: scene.platforms[1].y + 21); scene.update(clock)
     let wallet = usage.wallet; jump()
     for _ in 0..<160 {
         let dx = scene.platforms[2].x - scene.player.position.x
@@ -1276,7 +1396,7 @@ if CommandLine.arguments.contains("--combat-test") {
         usage.save.runStarted = false
         usage.setDifficulty(mode)
         for number in 1...Stage.all.count {
-            usage.save.stage = number; scene.loadStage()
+            usage.save.stage = number; scene.loadStage(); scene.switchOn = true
             verify(scene.children.filter { $0.name == "cannon" }.count == (scene.hasCannons ? 1 : 0))
             let labels = scene.children.compactMap { $0 as? SKLabelNode }.filter { !$0.isHidden }
             verify(labels.count == 1 && labels.first === scene.hud && scene.warningLine.isHidden)
