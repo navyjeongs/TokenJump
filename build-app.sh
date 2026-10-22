@@ -17,7 +17,7 @@ root = Path(sys.argv[1])
 PYTHON
   extra_flags=(-vfsoverlay "$PWD/.build/workaround/overlay.json")
 fi
-swiftc "${extra_flags[@]}" -O -swift-version 5 -module-cache-path "$CLANG_MODULE_CACHE_PATH" -framework AppKit -framework SpriteKit Sources/TokenJump/main.swift -o .build/release/TokenJump
+swiftc "${extra_flags[@]}" -target arm64-apple-macosx14.0 -O -swift-version 5 -module-cache-path "$CLANG_MODULE_CACHE_PATH" -framework AppKit -framework SpriteKit Sources/TokenJump/main.swift -o .build/release/TokenJump
 swiftc "${extra_flags[@]}" -swift-version 5 -module-cache-path "$CLANG_MODULE_CACHE_PATH" -framework AppKit Tools/RenderSprites.swift -o .build/render-sprites
 .build/render-sprites Assets/Sprites .build/release/Sprites Assets/Sprites-preview.png
 mkdir -p .build/release/Fonts 'dist/Token Jump.app/Contents/Resources/Fonts'
@@ -44,4 +44,14 @@ cat > 'dist/Token Jump.app/Contents/Info.plist' <<'PLIST'
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 </dict></plist>
 PLIST
+python3 - <<'PY'
+import plistlib, re, subprocess
+from pathlib import Path
+contents = Path('dist/Token Jump.app/Contents')
+minimum = plistlib.loads((contents / 'Info.plist').read_bytes())['LSMinimumSystemVersion']
+build = subprocess.check_output(['xcrun', 'vtool', '-show-build', str(contents / 'MacOS/TokenJump')], text=True)
+match = re.search(r'^\s*minos\s+(\S+)', build, re.MULTILINE)
+assert match and match[1] == minimum, f'Executable deployment target does not match macOS {minimum}:\n{build}'
+print(f'Verified executable minimum macOS version: {minimum}')
+PY
 codesign --force --sign - 'dist/Token Jump.app'
