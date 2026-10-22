@@ -26,7 +26,7 @@ enum GameFont {
 enum Difficulty: String, CaseIterable {
     case normal, hard, hardcore
     var title: String { self == .normal ? "보통" : (self == .hard ? "어려움" : "하드코어") }
-    var cost: Int { self == .normal ? 10_000 : 25_000 }
+    var cost: Int { self == .normal ? 50_000 : 125_000 }
     var width: CGFloat { self == .normal ? 90 : 60 }
     var gap: CGFloat { self == .normal ? 85 : 95 }
 }
@@ -1104,7 +1104,7 @@ if CommandLine.arguments.contains("--starter-test") {
     for _ in 0..<30 { verify(usage.spend()) }
     verify(!usage.spend() && usage.wallet == 0 && (usage.save.spent ?? 0) == 0 && usage.save.jumpCount == 30)
     let reopened = Usage(stateDirectory: dir); verify(reopened.available == 0)
-    reopened.addTokens(25000); verify(reopened.spend() && reopened.wallet == 0 && reopened.save.spent == 25000)
+    reopened.addTokens(125000); verify(reopened.spend() && reopened.wallet == 0 && reopened.save.spent == 125000)
     reopened.save.starterJumpsRemaining = nil; reopened.persist()
     verify(Usage(stateDirectory: dir).available == 0)
     print("PASS: 30 starter jumps, difficulty-independent, bonus-first spending, no fake token income, persistent exhaustion, no legacy regrant")
@@ -1133,31 +1133,32 @@ if CommandLine.arguments.contains("--self-test") {
     usage.scan(roots: [(logs, true)])
     verify(usage.save.credits == 0)
     let handle = try! FileHandle(forWritingTo: file); try! handle.seekToEnd()
-    try! handle.write(contentsOf: Data((event(75000) + event(75000)).utf8)); try! handle.close()
+    try! handle.write(contentsOf: Data((event(175000) + event(175000)).utf8)); try! handle.close()
     usage.scan(roots: [(logs, true)])
-    verify(usage.save.credits == 2 && usage.save.remainder == 5000)
-    usage.scan(roots: [(logs, true)]); verify(usage.save.credits == 2)
+    verify(usage.save.credits == 12 && usage.save.remainder == 5000)
+    usage.scan(roots: [(logs, true)]); verify(usage.save.credits == 12)
+    verify(usage.available == 2)
     verify(usage.spend() && usage.spend() && !usage.spend())
     let restored = Usage(starterJumps: 0, stateDirectory: dir.appendingPathComponent("state"))
-    verify(restored.save.credits == 0 && restored.save.remainder == 5000)
+    verify(restored.save.credits == 2 && restored.save.remainder == 5000)
     let claude = logs.appendingPathComponent("claude.jsonl")
     let record = "{\"type\":\"assistant\",\"message\":{\"id\":\"test-message\",\"usage\":{\"input_tokens\":5000,\"output_tokens\":1000}}}\n"
     try! Data((record + record).utf8).write(to: claude)
     restored.scan(roots: [(logs, false)])
-    verify(restored.save.credits == 1 && restored.save.remainder == 1000)
+    verify(restored.save.credits == 3 && restored.save.remainder == 1000)
     restored.scan(roots: [(logs, false)])
-    verify(restored.save.credits == 1 && restored.save.remainder == 1000)
-    verify(restored.save.collected == 31_000 && restored.save.spent == 20_000 && restored.save.jumpCount == 2)
-    verify(restored.save.providerTokens?["Codex"] == 25_000 && restored.save.providerTokens?["Claude Code"] == 6_000)
+    verify(restored.save.credits == 3 && restored.save.remainder == 1000)
+    verify(restored.save.collected == 131_000 && restored.save.spent == 100_000 && restored.save.jumpCount == 2)
+    verify(restored.save.providerTokens?["Codex"] == 125_000 && restored.save.providerTokens?["Claude Code"] == 6_000)
     let balance = restored.wallet
     restored.setDifficulty(.hard)
-    verify(restored.wallet == balance && restored.available == balance / 25_000)
+    verify(restored.wallet == balance && restored.available == balance / 125_000)
     verify(!restored.spend())
-    restored.addTokens(50_000)
+    restored.addTokens(250_000)
     verify(restored.available == 2)
-    verify(restored.spend() && restored.wallet == balance + 25_000)
+    verify(restored.spend() && restored.wallet == balance + 125_000)
     restored.setDifficulty(.normal)
-    verify(restored.available == restored.wallet / 10_000)
+    verify(restored.available == restored.wallet / 50_000)
     let legacy = Usage(starterJumps: 0, stateDirectory: dir.appendingPathComponent("state"))
     verify(legacy.difficulty == .normal && legacy.wallet == restored.wallet)
     for mode in Difficulty.allCases {
@@ -1250,7 +1251,7 @@ if CommandLine.arguments.contains("--ui-test") {
     controller.startSelectedStage(); controller.scene.cleared = false
     controller.usage.save.credits = 0; controller.usage.save.remainder = 0; controller.refreshUsage()
     verify(!controller.emptyHint.isHidden)
-    controller.usage.save.credits = 1; controller.refreshUsage(); verify(controller.emptyHint.isHidden)
+    controller.usage.addTokens(controller.usage.threshold); controller.refreshUsage(); verify(controller.emptyHint.isHidden)
     controller.timer?.invalidate()
     try? FileManager.default.removeItem(at: controller.usage.url.deletingLastPathComponent())
     print("PASS: clear overlay instructions, Enter advances unlocked stage, finale difficulty action, overlay hidden on usage tab")
@@ -1666,7 +1667,7 @@ if CommandLine.arguments.contains("--game-test") {
     scene.player.position = CGPoint(x: 210 + scene.platformWidth / 2 + 9, y: 122); scene.velocity = -100; scene.grounded = false
     scene.keys = [2]; scene.last = clock; clock += 1.0 / 30; scene.update(clock)
     verify(scene.grounded && scene.player.position.y == 121)
-    scene.cleared = false; scene.keys.removeAll(); usage.save.credits = 10
+    scene.cleared = false; scene.keys.removeAll(); usage.save.credits = 100
     scene.player.position = CGPoint(x: 210, y: 122); scene.velocity = -40; scene.grounded = false; scene.last = clock
     let bufferBalance = usage.wallet
     scene.keyDown(with: key(49)); verify(usage.wallet == bufferBalance)

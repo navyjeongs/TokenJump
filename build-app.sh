@@ -27,11 +27,16 @@ mkdir -p 'dist/Token Jump.app/Contents/Resources/Sprites'
 cp .build/release/Sprites/*.png 'dist/Token Jump.app/Contents/Resources/Sprites/'
 mkdir -p 'dist/Token Jump.app/Contents/MacOS'
 cp .build/release/TokenJump 'dist/Token Jump.app/Contents/MacOS/TokenJump'
+swiftc "${extra_flags[@]}" -module-cache-path "$CLANG_MODULE_CACHE_PATH" -framework AppKit Tools/RenderIcon.swift -o .build/render-icon
+.build/render-icon .build/TokenJump.iconset
+iconutil -c icns .build/TokenJump.iconset -o 'dist/Token Jump.app/Contents/Resources/TokenJump.icns'
+cp .build/TokenJump.iconset/icon_512x512@2x.png Assets/TokenJump-icon.png
 cat > 'dist/Token Jump.app/Contents/Info.plist' <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>local.tokenjump.app</string>
+<key>CFBundleIconFile</key><string>TokenJump</string>
 <key>CFBundleName</key><string>Token Jump</string>
 <key>CFBundleExecutable</key><string>TokenJump</string>
 <key>CFBundlePackageType</key><string>APPL</string>
